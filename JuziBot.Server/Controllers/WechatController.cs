@@ -1,6 +1,7 @@
 ﻿using JuziBot.Server.ViewModels;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
 using OpenAI.Interfaces;
 using OpenAI.Managers;
 using OpenAI.ObjectModels;
@@ -28,7 +29,7 @@ namespace JuziBot.Server.Controllers
         [Route("ReceiveMessageCallback")]
         public async Task<string> ReceiveMessageCallback([FromBody]WechatMessageModel body)
         {
-            string bodyStr = JsonSerializer.Serialize(body);
+            string bodyStr = System.Text.Json.JsonSerializer.Serialize(body);
             _logger.LogInformation(bodyStr);
             if(!string.IsNullOrWhiteSpace(body.payload.text) && 
                 body.payload.text.Trim().StartsWith("http://mp.weixin.qq.com/"))
@@ -36,7 +37,10 @@ namespace JuziBot.Server.Controllers
                 var url = body.payload.text.Trim().Replace("\\u0026", "&").Replace(" ", "");
                 string htmlContent = await GetArticleContentAsync(url);
                 
-                return await CallOpenAIAsync(htmlContent);
+                var summary = await CallOpenAIAsync(htmlContent);
+                _logger.LogInformation("Send Summary To Wechat User");
+                await SendSummaryToWechatAsync(summary, body);
+                return summary;
             }
             return "遇到内部错误，未能总结";
         }
@@ -136,6 +140,36 @@ namespace JuziBot.Server.Controllers
             return "遇到内部错误，未能总结";
         }
 
+        private async Task SendSummaryToWechatAsync(string summary, WechatMessageModel wmm)
+        {
+            var client = new HttpClient();
+
+            // Create HttpRequestMessage
+            var request = new HttpRequestMessage
+            {
+                Method = HttpMethod.Post,
+                RequestUri = new Uri("https://hub.juzibot.com/api/v2/message/send?token=058c38ca57b643c080da6d47232c83a7"), // Use the correct URI
+                Headers =
+                {
+                    { HttpRequestHeader.UserAgent.ToString(), "Apifox/1.0.0 (https://apifox.com)" },
+                    { HttpRequestHeader.ContentType.ToString(), "application/json" }
+                },
+                Content = new StringContent(JsonConvert.SerializeObject(new
+                {
+                    imBotId = wmm.imBotId,
+                    imContactId = wmm.imContactId,
+                    messageType = 7,
+                    payload = new { text = summary }
+                }), System.Text.Encoding.UTF8, "application/json")
+            };
+
+            // Send the request
+            var response = await client.SendAsync(request);
+
+            // Read the response
+            var responseContent = await response.Content.ReadAsStringAsync();
+            _logger.LogInformation(responseContent);
+        }
     }
 
 }
