@@ -1,0 +1,6 @@
+@JuziBot.Server_HostAddress = http://localhost:5041
+
+GET {{JuziBot.Server_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
