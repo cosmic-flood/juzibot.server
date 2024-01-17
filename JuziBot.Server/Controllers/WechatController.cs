@@ -1,6 +1,10 @@
 ﻿using JuziBot.Server.ViewModels;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using OpenAI.Interfaces;
+using OpenAI.Managers;
+using OpenAI.ObjectModels;
+using OpenAI.ObjectModels.RequestModels;
 using System.Dynamic;
 using System.Net;
 using System.Text.Json;
@@ -12,15 +16,17 @@ namespace JuziBot.Server.Controllers
     public class WechatController : ControllerBase
     {
         private readonly ILogger<WechatController> _logger;
+        private readonly IOpenAIService _openAIService;
 
-        public WechatController(ILogger<WechatController> logger)
+        public WechatController(ILogger<WechatController> logger, IOpenAIService openAIService)
         {
             _logger = logger;
+            _openAIService = openAIService;
         }
 
         [HttpPost]
         [Route("ReceiveMessageCallback")]
-        public async Task ReceiveMessageCallback([FromBody]WechatMessageModel body)
+        public async Task<string> ReceiveMessageCallback([FromBody]WechatMessageModel body)
         {
             string bodyStr = JsonSerializer.Serialize(body);
             _logger.LogInformation(bodyStr);
@@ -29,7 +35,10 @@ namespace JuziBot.Server.Controllers
             {
                 var url = body.payload.text.Trim().Replace("\\u0026", "&").Replace(" ", "");
                 string htmlContent = await GetArticleContentAsync(url);
+                
+                return await CallOpenAIAsync(htmlContent);
             }
+            return "遇到内部错误，未能总结";
         }
 
 
@@ -42,6 +51,13 @@ namespace JuziBot.Server.Controllers
             _logger.LogInformation(finalStr);
         }
 
+        [HttpPost]
+        [Route("MakeContentASummary")]
+        public async Task<string> MakeContentASummary([FromBody] ArticleHtmlContentModel body)
+        {
+            return await CallOpenAIAsync(body.Body);
+        }
+
         private async Task<string> GetArticleContentAsync(string url)
         {
             using var client = new HttpClient();
@@ -51,8 +67,73 @@ namespace JuziBot.Server.Controllers
             var startIndex = content.IndexOf("id=\"js_content\"");
             var startStr = content.Substring(startIndex);
             var endIndex = startStr.IndexOf("<script type=\"text/javascript\"");
-            var finalStr = startStr.Substring(0, endIndex);
+            var finalStr = "<div " + startStr.Substring(0, endIndex).Replace("  ", "");
+
+            string[] symboles = ["div", "p", "blockquote", "section", "span", "img", "ul", "li", "strong", "br", "em"];
+            foreach(var symbole in symboles)
+            {
+                while (true)
+                {
+                    if (finalStr.Contains($"<{symbole}"))
+                    {
+                        try
+                        {
+                            var tS = finalStr.IndexOf($"<{symbole}");
+                            var tE = finalStr.Substring(tS).IndexOf(">");
+                            if (tE > 0)
+                            {
+                                if (symbole == "li")
+                                {
+                                    finalStr = finalStr.Insert(tS, " \n\r - ");
+                                    tS = tS + 6;
+                                    tE = tE + 8;
+                                }
+                                finalStr = finalStr.Remove(tS, tE + 1);
+                            }
+                            //var tES = finalStr.IndexOf($"</{symbole}>");
+                            //if (tES > 0)
+                            //    finalStr = finalStr.Remove(tES, symbole.Length + 3);
+                        }
+                        catch (Exception exp)
+                        {
+                            _logger.LogError(exp.Message);
+                            return "遇到内部错误，未能总结";
+                        }
+                    }
+                    else
+                    {
+                        finalStr = finalStr.Replace($"</{symbole}>", "");
+                        finalStr = finalStr.Replace($"<{symbole}/>", "");
+                        finalStr = finalStr.Replace($"<{symbole} />", "");
+                        //finalStr = finalStr.Replace($"\n\r", " ");
+                        break;
+                    }
+                }
+            }
+
             return finalStr;
+        }
+
+        private async Task<string> CallOpenAIAsync(string prompt)
+        {
+            _openAIService.SetDefaultModelId(Models.Gpt_3_5_Turbo_16k);
+            var completionResult = await _openAIService.ChatCompletion.CreateCompletion(new ChatCompletionCreateRequest
+            {
+                Messages = new List<ChatMessage>
+                {
+                    ChatMessage.FromSystem("微信公众号文章分析总结"),
+                    ChatMessage.FromUser($"```html  \n\r {prompt}  \n\r ```  请帮我对上面Html中的文章内容进行总结，并将总结限制在180字以内")
+                },
+                Model = Models.Gpt_3_5_Turbo_16k,
+                MaxTokens = 10000//optional
+            });
+            if (completionResult.Successful)
+            {
+                var summary = completionResult.Choices.First().Message.Content;
+                _logger.LogInformation(summary);
+                return summary ?? "";
+            }
+            return "遇到内部错误，未能总结";
         }
 
     }
