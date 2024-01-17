@@ -27,18 +27,28 @@ namespace JuziBot.Server.Controllers
 
         [HttpPost]
         [Route("ReceiveMessageCallback")]
-        public async Task<string> ReceiveMessageCallback([FromBody]WechatMessageModel body)
+        //public async Task<string> ReceiveMessageCallback([FromBody]WechatMessageModel body)
+        public async Task<string> ReceiveMessageCallback([FromBody]dynamic dbody)
         {
+            string dbodyStr = dbody.ToString();
+            _logger.LogInformation(dbodyStr);
+            //Console.WriteLine(dbodyStr);
+            var body = JsonConvert.DeserializeObject<WechatMessageModel>(dbodyStr);
             string bodyStr = System.Text.Json.JsonSerializer.Serialize(body);
             _logger.LogInformation(bodyStr);
-            if(!string.IsNullOrWhiteSpace(body.payload.text) && 
-                body.payload.text.Trim().StartsWith("http://mp.weixin.qq.com/"))
+            //Console.WriteLine(bodyStr);
+            if (!string.IsNullOrWhiteSpace(body.payload.url) && 
+                (
+                 body.payload.url.Trim().StartsWith("http://mp.weixin.qq.com/") ||
+                 body.payload.url.Trim().StartsWith("https://mp.weixin.qq.com/")
+                ))
             {
-                var url = body.payload.text.Trim().Replace("\\u0026", "&").Replace(" ", "");
+                var url = body.payload.url.Trim().Replace("\\u0026", "&").Replace(" ", "");
                 string htmlContent = await GetArticleContentAsync(url);
                 
                 var summary = await CallOpenAIAsync(htmlContent);
                 _logger.LogInformation("Send Summary To Wechat User");
+                //Console.WriteLine("Send Summary To Wechat User");
                 await SendSummaryToWechatAsync(summary, body);
                 return summary;
             }
@@ -101,6 +111,7 @@ namespace JuziBot.Server.Controllers
                         catch (Exception exp)
                         {
                             _logger.LogError(exp.Message);
+                            Console.WriteLine(exp.Message);
                             return "遇到内部错误，未能总结";
                         }
                     }
@@ -134,6 +145,7 @@ namespace JuziBot.Server.Controllers
             if (completionResult.Successful)
             {
                 var summary = completionResult.Choices.First().Message.Content;
+                //Console.WriteLine(summary);
                 _logger.LogInformation(summary);
                 return summary ?? "";
             }
