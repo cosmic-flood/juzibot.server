@@ -35,7 +35,7 @@ namespace JuziBot.Server.Controllers
             //Console.WriteLine(dbodyStr);
             var body = JsonConvert.DeserializeObject<WechatMessageModel>(dbodyStr);
             string bodyStr = System.Text.Json.JsonSerializer.Serialize(body);
-            _logger.LogInformation(bodyStr);
+            //_logger.LogInformation(bodyStr);
             //Console.WriteLine(bodyStr);
             if (!string.IsNullOrWhiteSpace(body.payload.url) && 
                 (
@@ -47,7 +47,7 @@ namespace JuziBot.Server.Controllers
                 string htmlContent = await GetArticleContentAsync(url);
                 
                 var summary = await CallOpenAIAsync(htmlContent);
-                _logger.LogInformation("Send Summary To Wechat User");
+                //_logger.LogInformation("Send Summary To Wechat User");
                 //Console.WriteLine("Send Summary To Wechat User");
                 await SendSummaryToWechatAsync(summary, body);
                 return summary;
@@ -58,11 +58,12 @@ namespace JuziBot.Server.Controllers
 
         [HttpGet]
         [Route("RetrieveArticleContent")]
-        public async Task RetrieveArticleContent()
+        public async Task<string> RetrieveArticleContent()
         {
-            string finalStr = await GetArticleContentAsync("http://mp.weixin.qq.com/s?__biz=MjM5MzE3NzE1OA==&mid=2247508851&idx=1&sn=906ff32495cafe12bdc59cc0ee0ee576&chksm=a699e85a91ee614cb5e793bd39f434e26bb1f13b5660d26162815dbaa0d3aae42e7e515ed8cc&mpshare=1&scene=1&srcid=0114zTvWnKU68Z7OiOwzykP9&sharer_shareinfo=ef4e7acd1e73a0e0987db471f8e8749b&sharer_shareinfo_first=81d2d798cd2d65f3253f4f97c5cd9047#rd");
+            string finalStr = await GetArticleContentAsync("https://mp.weixin.qq.com/s?__biz=MzIyMDA3MjMwNw%3D%3D&mid=2455852912&idx=1&sn=fb5ef33c2dac532198114317996ec804&chksm=8044676cb733ee7a898e8ffdf1cd39f8834d58efd1ecac73b347f37e125006406b6c700be172&mpshare=1&scene=1&srcid=0118iRC6h2rTNNevbgInXxZD&sharer_shareinfo=5ae48380cce443714d49a365aaa67f61&sharer_shareinfo_first=5ae48380cce443714d49a365aaa67f61&from=industrynews#rd");
             Console.WriteLine(finalStr);
             _logger.LogInformation(finalStr);
+            return finalStr;
         }
 
         [HttpPost]
@@ -83,7 +84,7 @@ namespace JuziBot.Server.Controllers
             var endIndex = startStr.IndexOf("<script type=\"text/javascript\"");
             var finalStr = "<div " + startStr.Substring(0, endIndex).Replace("  ", "");
 
-            string[] symboles = ["div", "p", "blockquote", "section", "span", "img", "ul", "li", "strong", "br", "em"];
+            string[] symboles = ["div", "p", "blockquote", "section", "span", "table", "tbody", "img", "ul", "li", "strong", "br", "em", "a", "tr", "td", "mp-"];
             foreach(var symbole in symboles)
             {
                 while (true)
@@ -96,17 +97,8 @@ namespace JuziBot.Server.Controllers
                             var tE = finalStr.Substring(tS).IndexOf(">");
                             if (tE > 0)
                             {
-                                if (symbole == "li")
-                                {
-                                    finalStr = finalStr.Insert(tS, " \n\r - ");
-                                    tS = tS + 6;
-                                    tE = tE + 8;
-                                }
                                 finalStr = finalStr.Remove(tS, tE + 1);
                             }
-                            //var tES = finalStr.IndexOf($"</{symbole}>");
-                            //if (tES > 0)
-                            //    finalStr = finalStr.Remove(tES, symbole.Length + 3);
                         }
                         catch (Exception exp)
                         {
@@ -120,7 +112,15 @@ namespace JuziBot.Server.Controllers
                         finalStr = finalStr.Replace($"</{symbole}>", "");
                         finalStr = finalStr.Replace($"<{symbole}/>", "");
                         finalStr = finalStr.Replace($"<{symbole} />", "");
-                        //finalStr = finalStr.Replace($"\n\r", " ");
+                        if (finalStr.Contains("</mp-") && symbole == "mp-")
+                        {
+                            var tS = finalStr.IndexOf($"</{symbole}");
+                            var tE = finalStr.Substring(tS).IndexOf(">");
+                            if (tE > 0)
+                            {
+                                finalStr = finalStr.Remove(tS, tE + 1);
+                            }
+                        }
                         break;
                     }
                 }
@@ -131,25 +131,32 @@ namespace JuziBot.Server.Controllers
 
         private async Task<string> CallOpenAIAsync(string prompt)
         {
-            _openAIService.SetDefaultModelId(Models.Gpt_3_5_Turbo_16k);
+            var model = Models.Gpt_3_5_Turbo_16k;
+            Console.WriteLine($"Length of Prompt: {prompt}");
+            _logger.LogInformation($"Length of Prompt: {prompt}");
+            if (prompt.Length > 8192)
+            {
+                model = Models.Gpt_4_1106_preview;
+            }
+            _openAIService.SetDefaultModelId(model);
             var completionResult = await _openAIService.ChatCompletion.CreateCompletion(new ChatCompletionCreateRequest
             {
                 Messages = new List<ChatMessage>
                 {
                     ChatMessage.FromSystem("微信公众号文章分析总结"),
-                    ChatMessage.FromUser($"```html  \n\r {prompt}  \n\r ```  请帮我对上面Html中的文章内容进行总结，并将总结限制在180字以内")
+                    ChatMessage.FromUser($"```html  \n\r {prompt}  \n\r ```  请帮我对上面Html中的文章内容用中文进行总结，并将总结限制在180字以内")
                 },
-                Model = Models.Gpt_3_5_Turbo_16k,
-                MaxTokens = 10000//optional
+                Model = model,
+                MaxTokens = 4096, //optional
             });
             if (completionResult.Successful)
             {
                 var summary = completionResult.Choices.First().Message.Content;
                 //Console.WriteLine(summary);
-                _logger.LogInformation(summary);
+                //_logger.LogInformation(summary);
                 return summary ?? "";
             }
-            return "遇到内部错误，未能总结";
+            return "遇到内部错误，未能总结。有可能是文章太长造成的。";
         }
 
         private async Task SendSummaryToWechatAsync(string summary, WechatMessageModel wmm)
